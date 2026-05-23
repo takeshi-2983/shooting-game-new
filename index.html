@@ -3,12 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>iPhone Web Shooting</title>
+    <title>iPhone Web Shooting - Stick Control</title>
     <style>
-        /* iPhoneの全画面表示・誤動作防止用のスタイル */
         * {
             box-sizing: border-box;
-            touch-action: none; /* ダブルタップズームやスクロールを無効化 */
+            touch-action: none;
             -webkit-touch-callout: none;
             -webkit-user-select: none;
         }
@@ -36,9 +35,241 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-// 画面解像度に合わせてキャンバスサイズを設定
 function resizeCanvas() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
+    joystick.baseX = 80;
+    joystick.baseY = canvas.height - 100;
+    joystick.stickX = joystick.baseX;
+    joystick.stickY = joystick.baseY;
 }
 window.addEventListener('resize', resizeCanvas);
+
+const joystick = {
+    baseX: 80,
+    baseY: 0,
+    baseRadius: 50,
+    stickX: 80,
+    stickY: 0,
+    stickRadius: 25,
+    active: false,
+    touchId: null,
+    vx: 0,
+    vy: 0
+};
+
+let gameState = 'TITLE'; 
+let score = 0;
+let lastShotTime = 0;
+const shotInterval = 150; 
+const playerSpeed = 6;
+
+const player = {
+    x: 0,
+    y: 0,
+    size: 20
+};
+
+let bullets = [];
+let enemies = [];
+let lastEnemyTime = 0;
+const enemyInterval = 600;
+
+resizeCanvas();
+
+window.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (gameState === 'TITLE' || gameState === 'GAMEOVER') {
+        resetGame();
+        gameState = 'PLAYING';
+        return;
+    }
+    for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        const dist = Math.hypot(touch.clientX - joystick.baseX, touch.clientY - joystick.baseY);
+        if (dist < joystick.baseRadius + 30 && !joystick.active) {
+            joystick.active = true;
+            joystick.touchId = touch.identifier;
+            updateJoystick(touch.clientX, touch.clientY);
+        }
+    }
+}, { passive: false });
+
+window.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (gameState !== 'PLAYING') return;
+    for (let i = 0; i < e.touches.length; i++) {
+        const touch = e.touches[i];
+        if (touch.identifier === joystick.touchId) {
+            updateJoystick(touch.clientX, touch.clientY);
+        }
+    }
+}, { passive: false });
+
+window.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (touch.identifier === joystick.touchId) {
+            joystick.active = false;
+            joystick.touchId = null;
+            joystick.stickX = joystick.baseX;
+            joystick.stickY = joystick.baseY;
+            joystick.vx = 0;
+            joystick.vy = 0;
+        }
+    }
+}, { passive: false });
+
+function updateJoystick(touchX, touchY) {
+    const dx = touchX - joystick.baseX;
+    const dy = touchY - joystick.baseY;
+    const dist = Math.hypot(dx, dy);
+    if (dist <= joystick.baseRadius) {
+        joystick.stickX = touchX;
+        joystick.stickY = touchY;
+    } else {
+        joystick.stickX = joystick.baseX + (dx / dist) * joystick.baseRadius;
+        joystick.stickY = joystick.baseY + (dy / dist) * joystick.baseRadius;
+    }
+    joystick.vx = (joystick.stickX - joystick.baseX) / joystick.baseRadius;
+    joystick.vy = (joystick.stickY - joystick.baseY) / joystick.baseRadius;
+}
+
+function resetGame() {
+    score = 0;
+    bullets = [];
+    enemies = [];
+    player.x = canvas.width / 2;
+    player.y = canvas.height - 150;
+    lastShotTime = 0;
+    lastEnemyTime = 0;
+    joystick.active = false;
+    joystick.vx = 0;
+    joystick.vy = 0;
+    joystick.stickX = joystick.baseX;
+    joystick.stickY = joystick.baseY;
+}
+
+function gameLoop(timestamp) {
+    update(timestamp);
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+function update(timestamp) {
+    if (gameState !== 'PLAYING') return;
+    player.x += joystick.vx * playerSpeed;
+    player.y += joystick.vy * playerSpeed;
+    player.x = Math.max(player.size, Math.min(canvas.width - player.size, player.x));
+    player.y = Math.max(player.size, Math.min(canvas.height - player.size, player.y));
+    if (timestamp - lastShotTime > shotInterval) {
+        bullets.push({
+            x: player.x,
+            y: player.y - player.size,
+            speed: 12,
+            size: 4
+        });
+        lastShotTime = timestamp;
+    }
+    bullets.forEach((b, index) => {
+        b.y -= b.speed;
+        if (b.y < 0) bullets.splice(index, 1);
+    });
+    if (timestamp - lastEnemyTime > enemyInterval) {
+        enemies.push({
+            x: Math.random() * (canvas.width - 40) + 20,
+            y: -20,
+            speed: Math.random() * 2 + 3,
+            size: 15
+        });
+        lastEnemyTime = timestamp;
+    }
+    enemies.forEach((enemy, eIndex) => {
+        enemy.y += enemy.speed;
+        if (enemy.y > canvas.height) {
+            gameState = 'GAMEOVER';
+        }
+        const distToPlayer = Math.hypot(enemy.x - player.x, enemy.y - player.y);
+        if (distToPlayer < enemy.size + player.size) {
+            gameState = 'GAMEOVER';
+        }
+        bullets.forEach((bullet, bIndex) => {
+            const distToBullet = Math.hypot(enemy.x - bullet.x, enemy.y - bullet.y);
+            if (distToBullet < enemy.size + bullet.size) {
+                enemies.splice(eIndex, 1);
+                bullets.splice(bIndex, 1);
+                score += 10;
+            }
+        });
+    });
+}
+
+function draw() {
+    ctx.fillStyle = '#0f172a'; 
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (gameState === 'TITLE') {
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 28px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('SPACESHIP SHOOTING', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = '18px sans-serif';
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('画面をタップしてスタート', canvas.width / 2, canvas.height / 2 + 30);
+        return;
+    }
+    if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = '18px sans-serif';
+        ctx.fillStyle = '#fff';
+        ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 + 20);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('タップしてリトライ', canvas.width / 2, canvas.height / 2 + 60);
+        return;
+    }
+    bullets.forEach(b => {
+        ctx.fillStyle = '#facc15';
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.fillStyle = '#38bdf8';
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y - player.size);
+    ctx.lineTo(player.x - player.size, player.y + player.size);
+    ctx.lineTo(player.x + player.size, player.y + player.size);
+    ctx.closePath();
+    ctx.fill();
+    enemies.forEach(e => {
+        ctx.fillStyle = '#f87171';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, e.size, 0, Math.PI * 2);
+        ctx.fill();
+    });
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`SCORE: ${score}`, 20, 50);
+
+    ctx.beginPath();
+    ctx.arc(joystick.baseX, joystick.baseY, joystick.baseRadius, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(joystick.stickX, joystick.stickY, joystick.stickRadius, 0, Math.PI * 2);
+    ctx.fillStyle = joystick.active ? 'rgba(56, 189, 248, 0.7)' : 'rgba(255, 255, 255, 0.5)';
+    ctx.fill();
+}
+
+requestAnimationFrame(gameLoop);
+</script>
+
+</body>
+</html>
