@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>iPhone Web Shooting - Stick Control</title>
+    <title>Space Shooter - Full Game</title>
     <style>
         * {
             box-sizing: border-box;
@@ -45,42 +45,47 @@ function resizeCanvas() {
 }
 window.addEventListener('resize', resizeCanvas);
 
+// --- ジョイスティックの設定 ---
 const joystick = {
-    baseX: 80,
-    baseY: 0,
-    baseRadius: 50,
-    stickX: 80,
-    stickY: 0,
-    stickRadius: 25,
-    active: false,
-    touchId: null,
-    vx: 0,
-    vy: 0
+    baseX: 80, baseY: 0, baseRadius: 50,
+    stickX: 80, stickY: 0, stickRadius: 25,
+    active: false, touchId: null, vx: 0, vy: 0
 };
 
-let gameState = 'TITLE'; 
+// --- ゲーム状態・システム管理 ---
+let gameState = 'TITLE'; // TITLE, PLAYING, STAGE_CLEAR, GAMEOVER, ALL_CLEAR
 let score = 0;
+let currentStage = 1;
+const maxStage = 3;
+let stageDefeatedCount = 0; // 現在のステージで倒した敵の数
+const stageTargetKills = 10; // ステージクリアに必要な撃破数
+
 let lastShotTime = 0;
 const shotInterval = 150; 
 const playerSpeed = 6;
 
-const player = {
-    x: 0,
-    y: 0,
-    size: 20
-};
-
+// --- オブジェクト配列 ---
+const player = { x: 0, y: 0, size: 20, powerLevel: 1 }; // powerLevel: 1〜3
 let bullets = [];
 let enemies = [];
+let items = [];
+let particles = []; // 爆発エフェクト用
+
 let lastEnemyTime = 0;
 const enemyInterval = 600;
 
 resizeCanvas();
 
+// --- タッチイベント ---
 window.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    if (gameState === 'TITLE' || gameState === 'GAMEOVER') {
+    if (gameState === 'TITLE' || gameState === 'GAMEOVER' || gameState === 'ALL_CLEAR') {
         resetGame();
+        gameState = 'PLAYING';
+        return;
+    }
+    if (gameState === 'STAGE_CLEAR') {
+        startNextStage();
         gameState = 'PLAYING';
         return;
     }
@@ -115,8 +120,7 @@ window.addEventListener('touchend', (e) => {
             joystick.touchId = null;
             joystick.stickX = joystick.baseX;
             joystick.stickY = joystick.baseY;
-            joystick.vx = 0;
-            joystick.vy = 0;
+            joystick.vx = 0; joystick.vy = 0;
         }
     }
 }, { passive: false });
@@ -126,8 +130,7 @@ function updateJoystick(touchX, touchY) {
     const dy = touchY - joystick.baseY;
     const dist = Math.hypot(dx, dy);
     if (dist <= joystick.baseRadius) {
-        joystick.stickX = touchX;
-        joystick.stickY = touchY;
+        joystick.stickX = touchX; joystick.stickY = touchY;
     } else {
         joystick.stickX = joystick.baseX + (dx / dist) * joystick.baseRadius;
         joystick.stickY = joystick.baseY + (dy / dist) * joystick.baseRadius;
@@ -136,21 +139,52 @@ function updateJoystick(touchX, touchY) {
     joystick.vy = (joystick.stickY - joystick.baseY) / joystick.baseRadius;
 }
 
-function resetGame() {
-    score = 0;
+// 爆発エフェクトの作成
+function createExplosion(x, y, color) {
+    for (let i = 0; i < 8; i++) {
+        particles.push({
+            x: x, y: y,
+            vx: (Math.random() - 0.5) * 6,
+            vy: (Math.random() - 0.5) * 6,
+            size: Math.random() * 3 + 2,
+            life: 20,
+            color: color
+        });
+    }
+}
+
+// 次のステージの準備
+function startNextStage() {
+    currentStage++;
+    stageDefeatedCount = 0;
     bullets = [];
     enemies = [];
+    items = [];
+    player.x = canvas.width / 2;
+    player.y = canvas.height - 150;
+}
+
+// 完全なゲームリセット
+function resetGame() {
+    score = 0;
+    currentStage = 1;
+    stageDefeatedCount = 0;
+    player.powerLevel = 1;
+    bullets = [];
+    enemies = [];
+    items = [];
+    particles = [];
     player.x = canvas.width / 2;
     player.y = canvas.height - 150;
     lastShotTime = 0;
     lastEnemyTime = 0;
     joystick.active = false;
-    joystick.vx = 0;
-    joystick.vy = 0;
+    joystick.vx = 0; joystick.vy = 0;
     joystick.stickX = joystick.baseX;
     joystick.stickY = joystick.baseY;
 }
 
+// --- メインループ ---
 function gameLoop(timestamp) {
     update(timestamp);
     draw();
@@ -159,65 +193,124 @@ function gameLoop(timestamp) {
 
 function update(timestamp) {
     if (gameState !== 'PLAYING') return;
+
+    // 1. プレイヤーの移動
     player.x += joystick.vx * playerSpeed;
     player.y += joystick.vy * playerSpeed;
     player.x = Math.max(player.size, Math.min(canvas.width - player.size, player.x));
     player.y = Math.max(player.size, Math.min(canvas.height - player.size, player.y));
+
+    // 2. ショット（パワーレベルに応じて分岐）
     if (timestamp - lastShotTime > shotInterval) {
-        bullets.push({
-            x: player.x,
-            y: player.y - player.size,
-            speed: 12,
-            size: 4
-        });
+        if (player.powerLevel === 1) {
+            bullets.push({ x: player.x, y: player.y - player.size, vx: 0, vy: -12, size: 4 });
+        } else if (player.powerLevel === 2) {
+            bullets.push({ x: player.x - 10, y: player.y - player.size, vx: -2, vy: -12, size: 4 });
+            bullets.push({ x: player.x + 10, y: player.y - player.size, vx: 2, vy: -12, size: 4 });
+        } else {
+            bullets.push({ x: player.x, y: player.y - player.size, vx: 0, vy: -12, size: 4 });
+            bullets.push({ x: player.x - 15, y: player.y - player.size, vx: -4, vy: -11, size: 4 });
+            bullets.push({ x: player.x + 15, y: player.y - player.size, vx: 4, vy: -11, size: 4 });
+        }
         lastShotTime = timestamp;
     }
+
+    // 3. 弾の移動
     bullets.forEach((b, index) => {
-        b.y -= b.speed;
-        if (b.y < 0) bullets.splice(index, 1);
+        b.x += b.vx;
+        b.y += b.vy;
+        if (b.y < 0 || b.x < 0 || b.x > canvas.width) bullets.splice(index, 1);
     });
-    if (timestamp - lastEnemyTime > enemyInterval) {
-        enemies.push({
-            x: Math.random() * (canvas.width - 40) + 20,
-            y: -20,
-            speed: Math.random() * 2 + 3,
-            size: 15
-        });
-        lastEnemyTime = timestamp;
+
+    // 4. 敵の生成（ステージが上がるごとに出現速度アップ）
+    const speedMultiplier = 1 + (currentStage - 1) * 0.4; // ステージごとに速度アップ
+    if (timestamp - lastEnemyTime > (enemyInterval / speedMultiplier)) {
+        // ステージクリアに必要な目標に達するまで敵を出す
+        if (enemies.length + stageDefeatedCount < stageTargetKills) {
+            enemies.push({
+                x: Math.random() * (canvas.width - 40) + 20,
+                y: -20,
+                speed: (Math.random() * 2 + 3) * speedMultiplier,
+                size: 15
+            });
+            lastEnemyTime = timestamp;
+        }
     }
+
+    // 5. 敵の移動と判定
     enemies.forEach((enemy, eIndex) => {
         enemy.y += enemy.speed;
-        if (enemy.y > canvas.height) {
+
+        if (enemy.y > canvas.height || Math.hypot(enemy.x - player.x, enemy.y - player.y) < enemy.size + player.size) {
+            createExplosion(player.x, player.y, '#38bdf8');
             gameState = 'GAMEOVER';
         }
-        const distToPlayer = Math.hypot(enemy.x - player.x, enemy.y - player.y);
-        if (distToPlayer < enemy.size + player.size) {
-            gameState = 'GAMEOVER';
-        }
+
         bullets.forEach((bullet, bIndex) => {
-            const distToBullet = Math.hypot(enemy.x - bullet.x, enemy.y - bullet.y);
-            if (distToBullet < enemy.size + bullet.size) {
+            if (Math.hypot(enemy.x - bullet.x, enemy.y - bullet.y) < enemy.size + bullet.size) {
+                createExplosion(enemy.x, enemy.y, '#f87171');
                 enemies.splice(eIndex, 1);
                 bullets.splice(bIndex, 1);
                 score += 10;
+                stageDefeatedCount++;
+
+                // 25%の確率でパワーアップアイテムをドロップ
+                if (Math.random() < 0.25) {
+                    items.push({ x: enemy.x, y: enemy.y, speed: 2, size: 12 });
+                }
+
+                // ステージクリア判定
+                if (stageDefeatedCount >= stageTargetKills) {
+                    if (currentStage === maxStage) {
+                        gameState = 'ALL_CLEAR';
+                    } else {
+                        gameState = 'STAGE_CLEAR';
+                    }
+                }
             }
         });
     });
+
+    // 6. アイテムの移動と取得判定
+    items.forEach((item, index) => {
+        item.y += item.speed;
+        // 画面外で消去
+        if (item.y > canvas.height) items.splice(index, 1);
+
+        // プレイヤーがアイテムを拾ったか
+        if (Math.hypot(item.x - player.x, item.y - player.y) < item.size + player.size) {
+            items.splice(index, 1);
+            score += 50;
+            if (player.powerLevel < 3) player.powerLevel++; // 最大レベル3
+            createExplosion(player.x, player.y, '#facc15');
+        }
+    });
+
+    // 7. パーティクルの更新
+    particles.forEach((p, index) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        if (p.life <= 0) particles.splice(index, 1);
+    });
 }
 
+// 画面描画
 function draw() {
     ctx.fillStyle = '#0f172a'; 
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
     if (gameState === 'TITLE') {
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 28px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('SPACESHIP SHOOTING', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.fillText('SPACE SHOOTER v2', canvas.width / 2, canvas.height / 2 - 20);
         ctx.font = '18px sans-serif';
         ctx.fillStyle = '#38bdf8';
         ctx.fillText('画面をタップしてスタート', canvas.width / 2, canvas.height / 2 + 30);
         return;
     }
+
     if (gameState === 'GAMEOVER') {
         ctx.fillStyle = '#ef4444';
         ctx.font = 'bold 36px sans-serif';
@@ -230,41 +323,92 @@ function draw() {
         ctx.fillText('タップしてリトライ', canvas.width / 2, canvas.height / 2 + 60);
         return;
     }
+
+    if (gameState === 'STAGE_CLEAR') {
+        ctx.fillStyle = '#4ade80';
+        ctx.font = 'bold 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`STAGE ${currentStage} CLEAR!`, canvas.width / 2, canvas.height / 2 - 20);
+        ctx.font = '18px sans-serif';
+        ctx.fillStyle = '#fff';
+        ctx.fillText('タップして次のステージへ', canvas.width / 2, canvas.height / 2 + 30);
+        return;
+    }
+
+    if (gameState === 'ALL_CLEAR') {
+        ctx.fillStyle = '#facc15';
+        ctx.font = 'bold 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('VICTORY!', canvas.width / 2, canvas.height / 2 - 40);
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px sans-serif';
+        ctx.fillText('全全ステージクリア達成！', canvas.width / 2, canvas.height / 2 + 5);
+        ctx.fillText(`Total Score: ${score}`, canvas.width / 2, canvas.height / 2 + 40);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('タップしてタイトルへ', canvas.width / 2, canvas.height / 2 + 90);
+        return;
+    }
+
+    // --- プレイ中の描画 ---
+    
+    // 弾の描画
     bullets.forEach(b => {
         ctx.fillStyle = '#facc15';
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2); ctx.fill();
     });
-    ctx.fillStyle = '#38bdf8';
+
+    // プレイヤー（機体）の描画
+    ctx.fillStyle = player.powerLevel == 1 ? '#38bdf8' : (player.powerLevel == 2 ? '#a855f7' : '#f43f5e'); // パワーで色変化
     ctx.beginPath();
     ctx.moveTo(player.x, player.y - player.size);
     ctx.lineTo(player.x - player.size, player.y + player.size);
     ctx.lineTo(player.x + player.size, player.y + player.size);
-    ctx.closePath();
-    ctx.fill();
+    ctx.closePath(); ctx.fill();
+
+    // 敵の描画
     enemies.forEach(e => {
         ctx.fillStyle = '#f87171';
-        ctx.beginPath();
-        ctx.arc(e.x, e.y, e.size, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(e.x, e.y, e.size, 0, Math.PI * 2); ctx.fill();
     });
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 20px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(`SCORE: ${score}`, 20, 50);
 
+    // アイテム（Pマークの四角）の描画
+    items.forEach(item => {
+        ctx.fillStyle = '#facc15';
+        ctx.fillRect(item.x - item.size/2, item.y - item.size/2, item.size, item.size);
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('P', item.x, item.y + 4);
+    });
+
+    // パーティクルの描画
+    particles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+    });
+
+    // UI表示（スコア・ステージ・進捗ゲージ）
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`STAGE: ${currentStage}`, 20, 40);
+    ctx.fillText(`SCORE: ${score}`, 20, 65);
+    
+    // 撃破達成率メーター
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.fillRect(20, 80, 100, 6);
+    ctx.fillStyle = '#4ade80';
+    ctx.fillRect(20, 80, (stageDefeatedCount / stageTargetKills) * 100, 6);
+
+    // 操作スティックの描画
     ctx.beginPath();
     ctx.arc(joystick.baseX, joystick.baseY, joystick.baseRadius, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)'; ctx.stroke();
 
     ctx.beginPath();
     ctx.arc(joystick.stickX, joystick.stickY, joystick.stickRadius, 0, Math.PI * 2);
-    ctx.fillStyle = joystick.active ? 'rgba(56, 189, 248, 0.7)' : 'rgba(255, 255, 255, 0.5)';
+    ctx.fillStyle = joystick.active ? 'rgba(56, 189, 248, 0.6)' : 'rgba(255, 255, 255, 0.4)';
     ctx.fill();
 }
 
