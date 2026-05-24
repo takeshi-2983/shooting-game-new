@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Space Shooter - Easy Mode</title>
+    <title>Space Shooter - Life 3 Mode</title>
     <style>
         * {
             box-sizing: border-box;
@@ -58,21 +58,27 @@ let score = 0;
 let currentStage = 1;
 const maxStage = 3;
 let stageDefeatedCount = 0; 
-const stageTargetKills = 10; // ステージクリアに必要な撃破数
+const stageTargetKills = 10; 
 
 let lastShotTime = 0;
-let shotInterval = 140; // ★連射速度を少しアップ
-const playerSpeed = 8;  // ★自機の移動スピードをアップ（6➔8）
+const shotInterval = 150; 
+const playerSpeed = 8;  // ★快適な移動スピードをキープ！
 
 // --- オブジェクト配列 ---
-const player = { x: 0, y: 0, size: 20, powerLevel: 1 }; 
+const player = { 
+    x: 0, y: 0, size: 20, 
+    powerLevel: 1, 
+    lives: 3,           // ★ライフを3に設定
+    invincibleTime: 0   // 被弾後の無敵時間タイマー
+}; 
+
 let bullets = [];
 let enemies = [];
 let items = [];
 let particles = []; 
 
 let lastEnemyTime = 0;
-const enemyInterval = 700; // 敵の出現頻度を少し緩やかに
+const enemyInterval = 600; // 元の緊張感のある出現頻度に戻す
 
 resizeCanvas();
 
@@ -152,6 +158,23 @@ function createExplosion(x, y, color) {
     }
 }
 
+// プレイヤーがダメージを受けた時の処理
+function playerHit() {
+    if (player.invincibleTime > 0) return; // 無敵中なら無視
+
+    player.lives--;
+    createExplosion(player.x, player.y, '#ff4500');
+
+    if (player.lives <= 0) {
+        gameState = 'GAMEOVER';
+    } else {
+        // 1.5秒間（約90フレーム）の無敵時間を付与
+        player.invincibleTime = 90;
+        // パワーダウンペナルティ（最低1）
+        if (player.powerLevel > 1) player.powerLevel--;
+    }
+}
+
 function startNextStage() {
     currentStage++;
     stageDefeatedCount = 0;
@@ -160,6 +183,7 @@ function startNextStage() {
     items = [];
     player.x = canvas.width / 2;
     player.y = canvas.height - 150;
+    player.invincibleTime = 60; // ステージ開始直後も少し無敵に
 }
 
 function resetGame() {
@@ -167,7 +191,8 @@ function resetGame() {
     currentStage = 1;
     stageDefeatedCount = 0;
     player.powerLevel = 1;
-    shotInterval = 140; // 連射速度リセット
+    player.lives = 3; // ライフリセット
+    player.invincibleTime = 0;
     bullets = [];
     enemies = [];
     items = [];
@@ -191,20 +216,28 @@ function gameLoop(timestamp) {
 function update(timestamp) {
     if (gameState !== 'PLAYING') return;
 
+    // 無敵タイマーのカウントダウン
+    if (player.invincibleTime > 0) {
+        player.invincibleTime--;
+    }
+
     player.x += joystick.vx * playerSpeed;
     player.y += joystick.vy * playerSpeed;
     player.x = Math.max(player.size, Math.min(canvas.width - player.size, player.x));
     player.y = Math.max(player.size, Math.min(canvas.height - player.size, player.y));
 
-    // ★ショット：最初から広範囲マルチショット、レベルアップで超高速化！
+    // ショット：アイテム強化制（1発 ➔ 2方向 ➔ 3方向）に戻す
     if (timestamp - lastShotTime > shotInterval) {
-        // 真ん中の弾
-        bullets.push({ x: player.x, y: player.y - player.size, vx: 0, vy: -12, size: 4 });
-        // 左斜めの弾
-        bullets.push({ x: player.x - 15, y: player.y - player.size, vx: -3, vy: -11, size: 4 });
-        // 右斜めの弾
-        bullets.push({ x: player.x + 15, y: player.y - player.size, vx: 3, vy: -11, size: 4 });
-        
+        if (player.powerLevel === 1) {
+            bullets.push({ x: player.x, y: player.y - player.size, vx: 0, vy: -12, size: 4 });
+        } else if (player.powerLevel === 2) {
+            bullets.push({ x: player.x - 10, y: player.y - player.size, vx: -1.5, vy: -12, size: 4 });
+            bullets.push({ x: player.x + 10, y: player.y - player.size, vx: 1.5, vy: -12, size: 4 });
+        } else {
+            bullets.push({ x: player.x, y: player.y - player.size, vx: 0, vy: -12, size: 4 });
+            bullets.push({ x: player.x - 15, y: player.y - player.size, vx: -3, vy: -11, size: 4 });
+            bullets.push({ x: player.x + 15, y: player.y - player.size, vx: 3, vy: -11, size: 4 });
+        }
         lastShotTime = timestamp;
     }
 
@@ -214,14 +247,14 @@ function update(timestamp) {
         if (b.y < 0 || b.x < 0 || b.x > canvas.width) bullets.splice(index, 1);
     });
 
-    // ★敵のスピード上昇率を大幅にマイルド化
-    const speedMultiplier = 1 + (currentStage - 1) * 0.15; 
-    if (timestamp - lastEnemyTime > enemyInterval) {
+    // 敵のスピード：元の手応えのある速度に戻す
+    const speedMultiplier = 1 + (currentStage - 1) * 0.4; 
+    if (timestamp - lastEnemyTime > (enemyInterval / speedMultiplier)) {
         if (enemies.length + stageDefeatedCount < stageTargetKills) {
             enemies.push({
                 x: Math.random() * (canvas.width - 40) + 20,
                 y: -20,
-                speed: (Math.random() * 1.5 + 2) * speedMultiplier, // ★敵のスピードを遅く調整
+                speed: (Math.random() * 2 + 3) * speedMultiplier, 
                 size: 15
             });
             lastEnemyTime = timestamp;
@@ -231,9 +264,20 @@ function update(timestamp) {
     enemies.forEach((enemy, eIndex) => {
         enemy.y += enemy.speed;
 
-        if (enemy.y > canvas.height || Math.hypot(enemy.x - player.x, enemy.y - player.y) < enemy.size + player.size) {
-            createExplosion(player.x, player.y, '#38bdf8');
-            gameState = 'GAMEOVER';
+        // 画面最下部に到達したらライフが減る（敵は消滅）
+        if (enemy.y > canvas.height) {
+            enemies.splice(eIndex, 1);
+            playerHit();
+            return;
+        }
+
+        // プレイヤーとの衝突判定
+        if (Math.hypot(enemy.x - player.x, enemy.y - player.y) < enemy.size + player.size) {
+            if (player.invincibleTime === 0) {
+                enemies.splice(eIndex, 1); // 当たった敵は消える
+                playerHit();
+                return;
+            }
         }
 
         bullets.forEach((bullet, bIndex) => {
@@ -244,9 +288,9 @@ function update(timestamp) {
                 score += 10;
                 stageDefeatedCount++;
 
-                // ★アイテムのドロップ率を60%に大幅アップ！
-                if (Math.random() < 0.6) {
-                    items.push({ x: enemy.x, y: enemy.y, speed: 2.5, size: 12 });
+                // アイテムドロップ率を元の25%に戻す
+                if (Math.random() < 0.25) {
+                    items.push({ x: enemy.x, y: enemy.y, speed: 2, size: 12 });
                 }
 
                 if (stageDefeatedCount >= stageTargetKills) {
@@ -267,12 +311,7 @@ function update(timestamp) {
         if (Math.hypot(item.x - player.x, item.y - player.y) < item.size + player.size) {
             items.splice(index, 1);
             score += 50;
-            
-            // ★アイテムを取るごとに発射間隔が短くなり、マシンガン化！
-            if (shotInterval > 60) {
-                shotInterval -= 25; 
-                player.powerLevel++;
-            }
+            if (player.powerLevel < 3) player.powerLevel++;
             createExplosion(player.x, player.y, '#facc15');
         }
     });
@@ -293,7 +332,7 @@ function draw() {
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 28px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('SPACE SHOOTER -EASY-', canvas.width / 2, canvas.height / 2 - 20);
+        ctx.fillText('SPACE SHOOTER', canvas.width / 2, canvas.height / 2 - 20);
         ctx.font = '18px sans-serif';
         ctx.fillStyle = '#38bdf8';
         ctx.fillText('画面をタップしてスタート', canvas.width / 2, canvas.height / 2 + 30);
@@ -343,13 +382,15 @@ function draw() {
         ctx.beginPath(); ctx.arc(b.x, b.y, b.size, 0, Math.PI * 2); ctx.fill();
     });
 
-    // パワー（連射速度）に応じて機体の色が変わるエフェクト
-    ctx.fillStyle = shotInterval > 100 ? '#38bdf8' : (shotInterval > 70 ? '#a855f7' : '#f43f5e'); 
-    ctx.beginPath();
-    ctx.moveTo(player.x, player.y - player.size);
-    ctx.lineTo(player.x - player.size, player.y + player.size);
-    ctx.lineTo(player.x + player.size, player.y + player.size);
-    ctx.closePath(); ctx.fill();
+    // プレイヤー（機体）の描画（無敵時間はチカチカ点滅させる）
+    if (player.invincibleTime === 0 || Math.floor(player.invincibleTime / 4) % 2 === 0) {
+        ctx.fillStyle = player.powerLevel == 1 ? '#38bdf8' : (player.powerLevel == 2 ? '#a855f7' : '#f43f5e'); 
+        ctx.beginPath();
+        ctx.moveTo(player.x, player.y - player.size);
+        ctx.lineTo(player.x - player.size, player.y + player.size);
+        ctx.lineTo(player.x + player.size, player.y + player.size);
+        ctx.closePath(); ctx.fill();
+    }
 
     enemies.forEach(e => {
         ctx.fillStyle = '#f87171';
@@ -370,16 +411,21 @@ function draw() {
         ctx.fillRect(p.x, p.y, p.size, p.size);
     });
 
+    // UI表示（ライフをハートマークで表現）
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 16px sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText(`STAGE: ${currentStage}`, 20, 40);
-    ctx.fillText(`SCORE: ${score}`, 20, 65);
+    
+    let heartStr = '';
+    for(let i=0; i<player.lives; i++) heartStr += '❤️';
+    ctx.fillText(`LIFE: ${heartStr}`, 20, 40);
+    ctx.fillText(`STAGE: ${currentStage}`, 20, 65);
+    ctx.fillText(`SCORE: ${score}`, 20, 90);
     
     ctx.fillStyle = 'rgba(255,255,255,0.2)';
-    ctx.fillRect(20, 80, 100, 6);
+    ctx.fillRect(20, 105, 100, 6);
     ctx.fillStyle = '#4ade80';
-    ctx.fillRect(20, 80, (stageDefeatedCount / stageTargetKills) * 100, 6);
+    ctx.fillRect(20, 105, (stageDefeatedCount / stageTargetKills) * 100, 6);
 
     ctx.beginPath();
     ctx.arc(joystick.baseX, joystick.baseY, joystick.baseRadius, 0, Math.PI * 2);
